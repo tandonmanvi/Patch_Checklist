@@ -1,0 +1,70 @@
+DATE=`date '+%H:%M %m-%d-%Y'`
+sqlplus -s apps/APPSPASSWORD <<EOF 
+set markup html on spool on entmap off
+set feedback off
+set pages 200
+
+spool prechecks.html
+PROMPT <h1 style="color:Brown">INSTANCE NAME</h1>
+select name from v\$database;
+
+PROMPT <b><font size="3" font color=#0000FF> <a name="session"><FONT face=Cambria size=3>INVALID OBJECTS</a></font></b><BR>
+select count(*) from dba_objects where status='INVALID';
+
+PROMPT <b><font size="3" font color=#0000FF> <a name="session"><FONT face=Cambria size=3>INVALID LIST</a></font></b><BR>
+select owner,object_name,object_type from dba_objects where status='INVALID';
+
+PROMPT <b><font size="3" font color=#0000FF> <a name="session"><FONT face=Cambria size=3>DBA INDEXES</a></font></b><BR>
+Select distinct status, DOMIDX_STATUS, DOMIDX_OPSTATUS, FUNCIDX_STATUS from dba_indexes;
+
+PROMPT <b><font size="3" font color=#0000FF> <a name="session"><FONT face=Cambria size=3>WORKFLOW STATUS</a></font></b><BR>
+select component_status
+from fnd_svc_components
+where component_id =
+(select component_id
+from fnd_svc_components
+where component_name = 'Workflow Notification Mailer');
+
+PROMPT <b><font size="3" font color=#0000FF> <a name="session"><FONT face=Cambria size=3>CONCURRENT MANAGERS</a></font></b><BR>
+select a.user_concurrent_queue_name name, a.running_processes, a.max_processes,
+nvl(b.running,0) run, nvl(c.pending,0) pend, d.status stat
+-- from apps.fnd_concurrent_worker_requests a,
+from apps.fnd_concurrent_queues_vl a,
+(select concurrent_queue_name, count(*)  running
+ from apps.fnd_concurrent_worker_requests
+ where phase_code = 'R'
+ group by concurrent_queue_name ) b,
+(select concurrent_queue_name, count(*)  pending
+ from apps.fnd_concurrent_worker_requests
+ where phase_code = 'P'
+ and requested_start_date <= sysdate
+ and status_code in ('Q','I')
+ and hold_flag= 'N'
+ group by concurrent_queue_name ) c,
+(select concurrent_queue_name, decode(control_code, 'E', 'Deactivated',' ') status
+ from applsys.fnd_concurrent_queues ) d
+where a.concurrent_queue_name = b.concurrent_queue_name (+)
+and a.concurrent_queue_name = c.concurrent_queue_name (+)
+and a.concurrent_queue_name = d.concurrent_queue_name (+)
+and d.status != 'Deactivated'
+group by a.user_concurrent_queue_name,  a.max_processes, a.running_processes,
+nvl(b.running,0), nvl(c.pending,0), d.status
+order by d.status, 1
+/
+
+spool off
+set markup html off spool off
+exit
+EOF
+
+(
+  echo To:sendemailto@xyz.com
+  echo From:abx@xyz.com
+  echo "Content-Type: text/html; "
+  echo Subject: CHECKLIST $1 on $DATE
+  echo
+  cat prechecks.html
+) | sendmail -t
+
+
+rm prechecks.html
